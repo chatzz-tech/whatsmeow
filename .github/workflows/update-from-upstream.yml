@@ -1,9 +1,13 @@
-name: Sync WhatsMeow Upstream + Apply Private Patch
+name: Sync WhatsMeow Upstream
+
+# Mescla tulir/whatsmeow na main deste fork, preservando o patch de botões (send.go).
+# O whatsapp-api fixa um commit específico no go.mod, então nada chega em produção
+# sem alguém atualizar o replace lá.
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 * * * *"
+    - cron: "0 9 * * *"
 
 jobs:
   sync:
@@ -12,40 +16,38 @@ jobs:
       contents: write
 
     steps:
-      - name: Checkout private repo
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Configure Git
         run: |
-          git config user.email "actions@github.com"
-          git config user.name "GitHub Actions Bot"
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
 
-      - name: Add upstream repository
+      - name: Fetch upstream
         run: |
-          git remote add upstream https://github.com/tulir/whatsmeow.git || true
-          git fetch upstream
+          git remote add upstream https://github.com/tulir/whatsmeow.git
+          git fetch upstream main
 
-      - name: Update main with upstream changes
+      - name: Merge upstream into main
         run: |
-          git checkout main
-          git merge upstream/main --ff-only || git merge upstream/main --no-edit
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Já está atualizado com o upstream."
+            exit 0
+          fi
+
+          git merge upstream/main --no-ff --no-commit || true
+
+          # O GITHUB_TOKEN não pode alterar .github/workflows; mantemos os workflows deste fork.
+          git restore --source=HEAD --staged --worktree -- .github
+
+          if [ -n "$(git diff --name-only --diff-filter=U)" ]; then
+            echo "::error::Conflito ao mesclar o upstream (provavelmente no patch de botões). Merge manual necessário:"
+            git diff --name-only --diff-filter=U
+            exit 1
+          fi
+
+          git commit --no-edit -m "Merge upstream/main"
           git push origin main
-
-      - name: Rebase buttons on updated main
-        run: |
-          git checkout buttons
-          git rebase main || echo "CONFLICTS_HAPPENED=true" >> $GITHUB_ENV
-
-      - name: Push updated buttons branch
-        if: env.CONFLICTS_HAPPENED != 'true'
-        run: |
-          git push --force-with-lease origin buttons
-
-      - name: Notify conflicts
-        if: env.CONFLICTS_HAPPENED == 'true'
-        run: |
-          echo "⚠️ Conflitos detectados no rebase da branch 'buttons'."
-          echo "Rebase manual necessário."
